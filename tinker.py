@@ -3,7 +3,7 @@ import random
 from typing import List, Tuple, Optional
 import time
 import sys
-from engine import choose_move
+from engine import Engine
 # Named opening sequences. Each entry is a dict with a name and a list of
 # (from_square, to_square) tuples in algebraic notation. You can iterate these
 # and call `move_player_piece` / `move_bot_piece` accordingly.
@@ -524,13 +524,13 @@ def engine_move_once(depth: int = 4):
         return None
     # copy board for engine search
     search_board = [row.copy() for row in board]
-    mv = choose_move(search_board, engine_color, depth)
+    mv = Engine.choose_move(search_board, engine_color, depth)
     if not mv:
         return None
     from_sq, to_sq = mv
     line, col = algebraic_to_coords(to_sq)
     if is_square_attacked(line, col, player_color):
-        engine_move_once(depth = depth + 1)
+        engine_move_once(depth=depth + 1)
     try:
         move_bot_piece(from_sq, to_sq)
     except Exception as e:

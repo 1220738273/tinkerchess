@@ -13,7 +13,6 @@ The board format is the same as in `tinker.py`: board[row][col] with row 0
 """
 from typing import List, Optional, Tuple
 from tinker import algebraic_to_coords
-
 PieceValues = {
     'P': 100,
     'N': 320,
