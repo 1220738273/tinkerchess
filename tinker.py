@@ -476,6 +476,18 @@ def get_pawn_positions(color: str) -> List[str]:
                 res.append(coords_to_algebraic(r, c))
     return res
 
+def mov_king(color: str) :
+    x, y = find_king(color)
+    directions = [(-1, -1), (-1, 0), (-1, 1),
+                  (0, -1),          (0, 1),
+                  (1, -1), (1, 0), (1, 1)]
+    for dr, dc in directions:
+        new_x, new_y = x + dr, y + dc
+        if 0 <= new_x < 8 and 0 <= new_y < 8:
+            if is_legal_move(x, y, new_x, new_y):
+                if not is_square_attacked(new_x, new_y, "w" if color == "b" else "b"):
+                    move_bot_piece(coords_to_algebraic(x, y), coords_to_algebraic(new_x, new_y))
+                    return
 
 def demo_moves():
     """Small demo: show how to move bot pieces and query pawns (only for demonstration)."""
@@ -501,13 +513,13 @@ def demo_moves():
     print("After demo, pawns:", get_pawn_positions(bot_color))
 
 
-def engine_move_once(depth: int = 3):
+def engine_move_once(depth: int = 4):
     """Ask the engine for a move at given depth and apply it once.
 
     Returns the move tuple (from_sq, to_sq) or None.
     """
-    if is_checkmate(engine_color) or is_checkmate(player_color):
-        return None
+    if is_checkmate(engine_color):
+        mov_king(engine_color)
     if current_turn != engine_color:
         return None
     # copy board for engine search
@@ -516,16 +528,18 @@ def engine_move_once(depth: int = 3):
     if not mv:
         return None
     from_sq, to_sq = mv
+    line, col = algebraic_to_coords(to_sq)
+    if is_square_attacked(line, col, player_color):
+        engine_move_once(depth = depth + 1)
     try:
         move_bot_piece(from_sq, to_sq)
     except Exception as e:
         print("Engine move failed:", e)
         return None
     draw_board()
-    return mv
 
 
-def engine_start(depth: int = 3, delay_ms: int = 500):
+def engine_start(depth: int = 4, delay_ms: int = 500):
     """Start the engine loop using Tk's event loop. The engine will play when it's its turn."""
 
     def step():
@@ -537,6 +551,11 @@ def engine_start(depth: int = 3, delay_ms: int = 500):
         root.after(delay_ms, step)
 
     root.after(delay_ms, step)
+def safecheck():
+    if is_checkmate(engine_color):
+        print("You win")
+    else:
+        print("You loose")
 # Bind click
 canvas.bind("<Button-1>", on_canvas_click)
 
@@ -544,6 +563,7 @@ canvas.bind("<Button-1>", on_canvas_click)
 setup_starting_position()
 draw_board()
 engine_start()
+safecheck()
 
 if __name__ == "__main__":
     # Expose some functions to the interactive namespace if needed

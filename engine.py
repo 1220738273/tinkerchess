@@ -12,6 +12,7 @@ The board format is the same as in `tinker.py`: board[row][col] with row 0
 == rank 8, row 7 == rank 1, pieces as 'wP','bK', etc., or None.
 """
 from typing import List, Optional, Tuple
+from tinker import algebraic_to_coords
 
 PieceValues = {
     'P': 100,
@@ -21,6 +22,108 @@ PieceValues = {
     'Q': 900,
     'K': 20000,
 }
+
+
+class Engine:
+    """Simple configurable engine instance.
+
+    Holds piece values so we can tune them during training.
+    """
+    def __init__(self, piece_values: Optional[dict] = None):
+        self.piece_values = piece_values.copy() if piece_values else PieceValues.copy()
+
+    def evaluate(self, board: List[List[Optional[str]]]) -> int:
+        """Evaluate board from White's perspective using current piece values."""
+        score = 0
+        for r in range(8):
+            for c in range(8):
+                p = board[r][c]
+                if not p:
+                    continue
+                val = self.piece_values.get(p[1], 0)
+                if p[0] == 'w':
+                    score += val
+                else:
+                    score -= val
+        return score
+
+    def choose_move(self, board: List[List[Optional[str]]], color: str, depth: int = 3) -> Optional[Tuple[str, str]]:
+        # simple wrapper around module functions but using self.evaluate via closure
+        # We'll implement a negamax that calls back to self.evaluate
+        best_move = None
+
+        def negamax(node_board, node_color, ply, alpha, beta):
+            if ply == 0:
+                return self.evaluate(node_board)
+            moves = generate_moves(node_board, node_color)
+            if not moves:
+                return self.evaluate(node_board)
+            value = -9999999
+            for (fr, fc), (tr, tc) in moves:
+                moved_piece = node_board[fr][fc]
+                captured = node_board[tr][tc]
+                make_move(node_board, fr, fc, tr, tc)
+                score = -negamax(node_board, 'b' if node_color == 'w' else 'w', ply - 1, -beta, -alpha)
+                undo_move(node_board, fr, fc, tr, tc, captured, moved_piece)
+                if score > value:
+                    value = score
+                alpha = max(alpha, score)
+                if alpha >= beta:
+                    break
+            return value
+
+        moves = generate_moves(board, color)
+        if not moves:
+            return None
+        best_score = -9999999
+        alpha = -9999999
+        beta = 9999999
+        for (fr, fc), (tr, tc) in moves:
+            moved_piece = board[fr][fc]
+            captured = board[tr][tc]
+            make_move(board, fr, fc, tr, tc)
+            score = -negamax(board, 'b' if color == 'w' else 'w', depth - 1, -beta, -alpha)
+            undo_move(board, fr, fc, tr, tc, captured, moved_piece)
+            if score > best_score:
+                best_score = score
+                best_move = (coords_to_algebraic(fr, fc), coords_to_algebraic(tr, tc))
+            alpha = max(alpha, score)
+        return best_move
+
+    def self_play(self, depth: int = 2, max_moves: int = 200) -> Tuple[str, List[Tuple[str, str]]]:
+        """Play a game between two copies of this engine and return winner ('w','b','draw') and move list."""
+        # initialize starting position
+        board = [[None for _ in range(8)] for _ in range(8)]
+        board[0] = ["bR", "bN", "bB", "bQ", "bK", "bB", "bN", "bR"]
+        board[1] = ["bP"] * 8
+        for r in range(2, 6):
+            board[r] = [None] * 8
+        board[6] = ["wP"] * 8
+        board[7] = ["wR", "wN", "wB", "wQ", "wK", "wB", "wN", "wR"]
+        moves = []
+        turn = 'w'
+        for ply in range(max_moves):
+            mv = self.choose_move(board, turn, depth)
+            if not mv:
+                # no moves
+                break
+            fr, to = mv
+            fr_r, fr_c = algebraic_to_coords(fr)
+            tr_r, tr_c = algebraic_to_coords(to)
+            make_move(board, fr_r, fr_c, tr_r, tr_c)
+            moves.append((fr, to))
+            # naive checkmate detection using is_checkmate from this module isn't available here
+            # We'll just switch turn
+            turn = 'b' if turn == 'w' else 'w'
+        # simple evaluation to pick winner
+        final = self.evaluate(board)
+        if final > 0:
+            return 'w', moves
+        if final < 0:
+            return 'b', moves
+        return 'draw', moves
+
+
 
 
 def _sign(x: int) -> int:
