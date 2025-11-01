@@ -12,7 +12,7 @@ The board format is the same as in `tinker.py`: board[row][col] with row 0
 == rank 8, row 7 == rank 1, pieces as 'wP','bK', etc., or None.
 """
 from typing import List, Optional, Tuple
-from tinker import algebraic_to_coords
+
 PieceValues = {
     'P': 100,
     'N': 320,
@@ -22,7 +22,6 @@ PieceValues = {
     'K': 20000,
 }
 
-
 class Engine:
     """Simple configurable engine instance.
 
@@ -30,6 +29,19 @@ class Engine:
     """
     def __init__(self, piece_values: Optional[dict] = None):
         self.piece_values = piece_values.copy() if piece_values else PieceValues.copy()
+
+    @staticmethod
+    def algebraic_to_coords(sq: str) -> Tuple[int, int]:
+        """Convert algebraic like 'e2' to internal (row, col)."""
+        if len(sq) != 2:
+            raise ValueError("Square must be in form like 'e2'")
+        file = sq[0].lower()
+        rank = int(sq[1])
+        col = ord(file) - ord("a")
+        row = 8 - rank
+        if not (0 <= row < 8 and 0 <= col < 8):
+            raise ValueError("Square out of range")
+        return row, col
 
     def evaluate(self, board: List[List[Optional[str]]]) -> int:
         """Evaluate board from White's perspective using current piece values."""
@@ -51,19 +63,19 @@ class Engine:
         # We'll implement a negamax that calls back to self.evaluate
         best_move = None
 
-        def negamax(node_board, node_color, ply, alpha, beta):
+        def negamax(board, color, ply, alpha, beta):
             if ply == 0:
-                return self.evaluate(node_board)
-            moves = generate_moves(node_board, node_color)
+                return self.evaluate(board)
+            moves = generate_moves(board, color)
             if not moves:
-                return self.evaluate(node_board)
+                return self.evaluate(board)
             value = -9999999
             for (fr, fc), (tr, tc) in moves:
-                moved_piece = node_board[fr][fc]
-                captured = node_board[tr][tc]
-                make_move(node_board, fr, fc, tr, tc)
-                score = -negamax(node_board, 'b' if node_color == 'w' else 'w', ply - 1, -beta, -alpha)
-                undo_move(node_board, fr, fc, tr, tc, captured, moved_piece)
+                moved_piece = board[fr][fc]
+                captured = board[tr][tc]
+                make_move(board, fr, fc, tr, tc)
+                score = -negamax(board, 'b' if color == 'w' else 'w', ply - 1, -beta, -alpha)
+                undo_move(board, fr, fc, tr, tc, captured, moved_piece)
                 if score > value:
                     value = score
                 alpha = max(alpha, score)
@@ -107,8 +119,8 @@ class Engine:
                 # no moves
                 break
             fr, to = mv
-            fr_r, fr_c = algebraic_to_coords(fr)
-            tr_r, tr_c = algebraic_to_coords(to)
+            fr_r, fr_c = Engine.algebraic_to_coords(fr)
+            tr_r, tr_c = Engine.algebraic_to_coords(to)
             make_move(board, fr_r, fr_c, tr_r, tr_c)
             moves.append((fr, to))
             # naive checkmate detection using is_checkmate from this module isn't available here
@@ -197,30 +209,76 @@ def is_legal_move(board: List[List[Optional[str]]], fr: int, fc: int, tr: int, t
     return False
 
 
+
 def generate_moves(board: List[List[Optional[str]]], color: str) -> List[Tuple[Tuple[int, int], Tuple[int, int]]]:
+    """Generate all pseudo-legal moves for the given color (no castling/en-passant)."""
+
     moves = []
+
+    # Direction sets for sliding pieces
+    directions = {
+        'N': [(-2, -1), (-1, -2), (-2, 1), (-1, 2), (1, -2), (2, -1), (1, 2), (2, 1)],
+        'B': [(-1, -1), (-1, 1), (1, -1), (1, 1)],
+        'R': [(-1, 0), (1, 0), (0, -1), (0, 1)],
+        'Q': [(-1, -1), (-1, 1), (1, -1), (1, 1), (-1, 0), (1, 0), (0, -1), (0, 1)],
+        'K': [(-1, -1), (-1, 1), (1, -1), (1, 1), (-1, 0), (1, 0), (0, -1), (0, 1)],
+    }
+
     for r in range(8):
         for c in range(8):
             piece = board[r][c]
             if not piece or piece[0] != color:
                 continue
-            for tr in range(8):
-                for tc in range(8):
-                    if r == tr and c == tc:
-                        continue
-                    if is_legal_move(board, r, c, tr, tc):
-                        moves.append(((r, c), (tr, tc)))
+            pt = piece[1]
+
+            if pt == 'P':
+                direction = -1 if color == 'w' else 1
+                start_row = 6 if color == 'w' else 1
+                # single step
+                tr = r + direction
+                if 0 <= tr < 8 and board[tr][c] is None:
+                    moves.append(((r, c), (tr, c)))
+                    # double step
+                    tr2 = r + 2 * direction
+                    if r == start_row and 0 <= tr2 < 8 and board[tr2][c] is None and board[tr][c] is None:
+                        moves.append(((r, c), (tr2, c)))
+                # captures
+                for dc in (-1, 1):
+                    tc = c + dc
+                    if 0 <= tr < 8 and 0 <= tc < 8:
+                        target = board[tr][tc]
+                        if target and target[0] != color:
+                            moves.append(((r, c), (tr, tc)))
+
+            elif pt in ('N', 'K'):
+                for dr, dc in directions[pt]:
+                    tr, tc = r + dr, c + dc
+                    if 0 <= tr < 8 and 0 <= tc < 8:
+                        target = board[tr][tc]
+                        if target is None or target[0] != color:
+                            moves.append(((r, c), (tr, tc)))
+
+            elif pt in ('B', 'R', 'Q'):
+                for dr, dc in directions[pt]:
+                    tr, tc = r + dr, c + dc
+                    while 0 <= tr < 8 and 0 <= tc < 8:
+                        target = board[tr][tc]
+                        if target is None:
+                            moves.append(((r, c), (tr, tc)))
+                        else:
+                            if target[0] != color:
+                                moves.append(((r, c), (tr, tc)))
+                            break  # blocked
+                        tr += dr
+                        tc += dc
+
     return moves
 
-
 def make_move(board: List[List[Optional[str]]], fr: int, fc: int, tr: int, tc: int) -> Optional[str]:
-    """Perform the move and return captured piece (if any). Does not handle promotion.
-    Caller may handle promotion separately.
-    """
+    """Perform the move and return captured piece (if any). Auto-promotes pawns to queen."""
     captured = board[tr][tc]
     board[tr][tc] = board[fr][fc]
     board[fr][fc] = None
-    # auto-promotion to queen as in UI
     piece = board[tr][tc]
     if piece and piece[1] == 'P':
         color = piece[0]
@@ -258,47 +316,100 @@ def coords_to_algebraic(r: int, c: int) -> str:
 
 
 def choose_move(board: List[List[Optional[str]]], color: str, depth: int = 3) -> Optional[Tuple[str, str]]:
-    """Return a move (from_sq, to_sq) for color using negamax alpha-beta.
-    depth is ply depth.
+    """Return best move (from_sq, to_sq) for `color` using negamax alpha-beta with
+    capture quiescence, move ordering, and basic mobility weighting.
     """
-    best_move = None
 
-    def negamax(node_board, node_color, ply, alpha, beta):
-        if ply == 0:
-            return evaluate(node_board)
-        moves = generate_moves(node_board, node_color)
+    INF = 10**9
+
+    def quiescence(board, color, alpha, beta):
+        """Extend search for capture sequences to reduce horizon effect."""
+        stand_pat = evaluate(board)
+        if stand_pat >= beta:
+            return beta
+        if alpha < stand_pat:
+            alpha = stand_pat
+
+        for (fr, fc), (tr, tc) in generate_moves(board, color):
+            # only explore captures
+            if board[tr][tc] is None:
+                continue
+            moved_piece = board[fr][fc]
+            captured = board[tr][tc]
+            make_move(board, fr, fc, tr, tc)
+            score = -quiescence(board, 'b' if color == 'w' else 'w', -beta, -alpha)
+            undo_move(board, fr, fc, tr, tc, captured, moved_piece)
+            if score >= beta:
+                return beta
+            if score > alpha:
+                alpha = score
+        return alpha
+
+    def negamax(board, color, depth, alpha, beta):
+        """Negamax with alpha-beta pruning and simple quiescence search."""
+        if depth == 0:
+            return quiescence(board, color, alpha, beta)
+
+        moves = generate_moves(board, color)
         if not moves:
-            # no moves -> checkmate or stalemate ambiguous; use eval
-            return evaluate(node_board)
-        value = -9999999
+            return evaluate(board)
+
+        # prioritize captures and checks
+        def move_score(move):
+            (fr, fc), (tr, tc) = move
+            target = board[tr][tc]
+            base = 0
+            if target:
+                base += PieceValues.get(target[1], 0)  # prefer valuable captures
+            return -base  # sort ascending so high value captures first
+
+        moves.sort(key=move_score)
+
+        value = -INF
+        next_color = 'b' if color == 'w' else 'w'
         for (fr, fc), (tr, tc) in moves:
-            moved_piece = node_board[fr][fc]
-            captured = node_board[tr][tc]
-            make_move(node_board, fr, fc, tr, tc)
-            score = -negamax(node_board, 'b' if node_color == 'w' else 'w', ply - 1, -beta, -alpha)
-            # undo
-            undo_move(node_board, fr, fc, tr, tc, captured, moved_piece)
-            if score > value:
-                value = score
-            alpha = max(alpha, score)
+            moved_piece = board[fr][fc]
+            captured = board[tr][tc]
+            make_move(board, fr, fc, tr, tc)
+            score = -negamax(board, next_color, depth - 1, -beta, -alpha)
+            undo_move(board, fr, fc, tr, tc, captured, moved_piece)
+
+            if value > alpha:
+                alpha = value
             if alpha >= beta:
                 break
+
         return value
+
+    # sanity check
+    if len(board) != 8 or any(len(row) != 8 or isinstance(row, str) for row in board):
+        raise ValueError("Invalid board format: expected 8x8 list of lists, not strings.")
 
     moves = generate_moves(board, color)
     if not moves:
         return None
-    best_score = -9999999
-    alpha = -9999999
-    beta = 9999999
+
+    best_move = None
+    best_score = -INF
+    alpha, beta = -INF, INF
+    next_color = 'b' if color == 'w' else 'w'
+
     for (fr, fc), (tr, tc) in moves:
         moved_piece = board[fr][fc]
         captured = board[tr][tc]
         make_move(board, fr, fc, tr, tc)
-        score = -negamax(board, 'b' if color == 'w' else 'w', depth - 1, -beta, -alpha)
+        score = -negamax(board, next_color, depth - 1, -beta, -alpha)
         undo_move(board, fr, fc, tr, tc, captured, moved_piece)
+
+        # slight mobility bias (favor positions with more available moves)
+        if score == best_score:
+            score += 0.01 * len(generate_moves(board, color))
+
         if score > best_score:
             best_score = score
             best_move = (coords_to_algebraic(fr, fc), coords_to_algebraic(tr, tc))
-        alpha = max(alpha, score)
+        if score > alpha:
+            alpha = score
+
     return best_move
+

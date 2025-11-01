@@ -57,7 +57,7 @@ selection_rect = None
 
 
 def setup_starting_position():
-    """Initialize board to standard chess starting position."""
+
     global board
     # Black major pieces (row 0), pawns (row 1)
     board[0] = ["bR", "bN", "bB", "bQ", "bK", "bB", "bN", "bR"]
@@ -166,6 +166,7 @@ def is_legal_move(from_r: int, from_c: int, to_r: int, to_c: int) -> bool:
     does not check for leaving/being in check.
     """
     # bounds
+    
     if not (0 <= from_r < 8 and 0 <= from_c < 8 and 0 <= to_r < 8 and 0 <= to_c < 8):
         return False
     piece = board[from_r][from_c]
@@ -322,6 +323,7 @@ def is_checkmate(color: str) -> bool:
     move for `color`; if any legal move results in king not being in check, not checkmate.
     This simulates moves and restores the board after each attempt.
     """
+
     if color not in ("w", "b"):
         raise ValueError("color must be 'w' or 'b'")
     if not is_in_check(color):
@@ -359,6 +361,7 @@ def is_checkmate(color: str) -> bool:
 
 
 def on_canvas_click(event):
+
     """Handle clicks to select and move player's pieces only."""
     global selected_sq
     try:
@@ -398,6 +401,7 @@ def move_piece(from_r: int, from_c: int, to_r: int, to_c: int):
     This function is intended for programmatic moves performed by the engine/bot.
     Player moves from the UI should use `move_player_piece` instead.
     """
+
     global current_turn
     piece = board[from_r][from_c]
     if piece is None:
@@ -421,6 +425,7 @@ def move_player_piece(from_r: int, from_c: int, to_r: int, to_c: int):
 
     This performs the simple no-rule move (captures allowed) for the player side.
     """
+
     global current_turn
     piece = board[from_r][from_c]
     if piece is None:
@@ -439,6 +444,7 @@ def move_player_piece(from_r: int, from_c: int, to_r: int, to_c: int):
 
 
 def perform_move_and_postprocess(from_r: int, from_c: int, to_r: int, to_c: int):
+
     """Perform the physical move and handle promotions/post-move updates."""
     piece = board[from_r][from_c]
     board[to_r][to_c] = piece
@@ -451,6 +457,7 @@ def perform_move_and_postprocess(from_r: int, from_c: int, to_r: int, to_c: int)
 
 
 def move_bot_piece(from_sq: str, to_sq: str):
+
     """
     Programmatically move an immovable (bot) piece.
     from_sq, to_sq: algebraic squares like 'e7', 'e5'
@@ -466,6 +473,7 @@ def move_bot_piece(from_sq: str, to_sq: str):
 
 
 def get_pawn_positions(color: str) -> List[str]:
+
     """Return list of algebraic squares for pawns of given color ('w' or 'b')."""
     if color not in ("w", "b"):
         raise ValueError("Color must be 'w' or 'b'")
@@ -477,6 +485,7 @@ def get_pawn_positions(color: str) -> List[str]:
     return res
 
 def mov_king(color: str) :
+
     x, y = find_king(color)
     directions = [(-1, -1), (-1, 0), (-1, 1),
                   (0, -1),          (0, 1),
@@ -489,42 +498,21 @@ def mov_king(color: str) :
                     move_bot_piece(coords_to_algebraic(x, y), coords_to_algebraic(new_x, new_y))
                     return
 
-def demo_moves():
-    """Small demo: show how to move bot pieces and query pawns (only for demonstration)."""
-    print("Player color:", player_color)
-    print("Initial white pawns:", get_pawn_positions("w"))
-    print("Initial black pawns:", get_pawn_positions("b"))
-    # Example bot move: move a pawn two squares forward if present
-    bot_color = "b" if player_color == "w" else "w"
-    pawns = get_pawn_positions(bot_color)
-    if pawns:
-        try:
-            src = pawns[0]
-            r, c = algebraic_to_coords(src)
-            # choose forward direction for bot color
-            dest_rank = int(src[1]) + ( -2 if bot_color == "b" else 2 )
-            # clamp to board
-            if 1 <= dest_rank <= 8:
-                dst = f"{src[0]}{dest_rank}"
-                move_bot_piece(src, dst)
-                print(f"Bot moved {src} -> {dst}")
-        except Exception as e:
-            print("Demo move failed:", e)
-    print("After demo, pawns:", get_pawn_positions(bot_color))
-
-
-def engine_move_once(depth: int = 4):
+def engine_move_once(depth: int = 5):
     """Ask the engine for a move at given depth and apply it once.
 
     Returns the move tuple (from_sq, to_sq) or None.
     """
+
     if is_checkmate(engine_color):
         mov_king(engine_color)
     if current_turn != engine_color:
         return None
     # copy board for engine search
     search_board = [row.copy() for row in board]
-    mv = Engine.choose_move(search_board, engine_color, depth)
+
+    mv = Engine.choose_move(engine_color, search_board, depth)
+    print(mv)
     if not mv:
         return None
     from_sq, to_sq = mv
@@ -552,6 +540,7 @@ def engine_start(depth: int = 4, delay_ms: int = 500):
 
     root.after(delay_ms, step)
 def safecheck():
+
     if is_checkmate(engine_color):
         print("You win")
     else:
