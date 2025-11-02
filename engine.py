@@ -12,6 +12,10 @@ The board format is the same as in `tinker.py`: board[row][col] with row 0
 == rank 8, row 7 == rank 1, pieces as 'wP','bK', etc., or None.
 """
 from typing import List, Optional, Tuple
+import random
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
 
 PieceValues = {
     'P': 100,
@@ -22,6 +26,19 @@ PieceValues = {
     'K': 20000,
 }
 
+class PositionalNN(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.fc1 = nn.Linear(8*8*12, 128)
+        self.fc2 = nn.Linear(128, 64)
+        self.fc3 = nn.Linear(64, 1)
+
+    def forward(self, x):
+        x = x.view(x.size(0), -1)  # flatten
+        x = F.relu(self.fc1(x))
+        x = F.relu(self.fc2(x))
+        return self.fc3(x)
+
 class Engine:
     """Simple configurable engine instance.
 
@@ -29,6 +46,11 @@ class Engine:
     """
     def __init__(self, piece_values: Optional[dict] = None):
         self.piece_values = piece_values.copy() if piece_values else PieceValues.copy()
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.nn = PositionalNN().to(self.device)
+        self.optimizer = torch.optim.Adam(self.nn.parameters(), lr=0.001)
+        self.loss_fn = nn.MSELoss()
+
 
     @staticmethod
     def algebraic_to_coords(sq: str) -> Tuple[int, int]:
@@ -58,94 +80,66 @@ class Engine:
                     score -= val
         return score
     def choose_move(board: List[List[Optional[str]]], color: str, depth: int = 3) -> Optional[Tuple[str, str]]:
+        INF = 1e9
 
+        def negamax(bd, col, d, alpha, beta, ply=0):
+            # deep quiescence: prioritize checks and captures
+            moves = generate_moves(bd, col)
+            if d == 0 or not moves:
+                return Engine.evaluate(bd, col)
 
-        INF = 10**9
+            best_val = -INF
+            next_col = 'b' if col == 'w' else 'w'
 
-        def quiescence(board, color, alpha, beta):
-            stand_pat = evaluate(board)
-            if stand_pat >= beta:
-                return beta
-            alpha = max(alpha, stand_pat)
+            # sort moves: check/capture first
+            def move_score(move):
+                fr, fc = move[0]
+                tr, tc = move[1]
+                target = bd[tr][tc]
+                score = 0
+                if target:  # capture
+                    score += PieceValues.get(target[1], 0)
+                make_move(bd, fr, fc, tr, tc)
+                if is_king_in_check(bd, next_col):
+                    score += 5000  # check bonus
+                undo_move(bd, fr, fc, tr, tc, target, bd[fr][fc])
+                return score
 
-            for (fr, fc), (tr, tc) in generate_moves(board, color):
-                if board[tr][tc] is None:  # only captures
-                    continue
-                moved_piece = board[fr][fc]
-                captured = board[tr][tc]
-                make_move(board, fr, fc, tr, tc)
-                score = -quiescence(board, 'b' if color == 'w' else 'w', -beta, -alpha)
-                undo_move(board, fr, fc, tr, tc, captured, moved_piece)
-                if score >= beta:
-                    return beta
-                alpha = max(alpha, score)
-            return alpha
-
-        def negamax(board, color, depth, alpha, beta):
-            if depth == 0:
-                return quiescence(board, color, alpha, beta)
-
-            moves = generate_moves(board, color)
-            if not moves:
-                return evaluate(board)
-
-            # capture-first ordering
-            def move_value(move):
-                (fr, fc), (tr, tc) = move
-                t = board[tr][tc]
-                return PieceValues.get(t[1], 0) if t else 0
-            moves.sort(key=move_value, reverse=True)
-
-            value = -INF
-            next_color = 'b' if color == 'w' else 'w'
+            moves.sort(key=move_score, reverse=True)
 
             for (fr, fc), (tr, tc) in moves:
-                moved_piece = board[fr][fc]
-                captured = board[tr][tc]
-                make_move(board, fr, fc, tr, tc)
-                score = -negamax(board, next_color, depth - 1, -beta, -alpha)
-                undo_move(board, fr, fc, tr, tc, captured, moved_piece)
-                if score > value:
-                    value = score
-                alpha = max(alpha, score)
+                moved_piece = bd[fr][fc]
+                captured = bd[tr][tc]
+                make_move(bd, fr, fc, tr, tc)
+                val = -negamax(bd, next_col, d - 1, -beta, -alpha, ply + 1)
+                undo_move(bd, fr, fc, tr, tc, captured, moved_piece)
+                if val > best_val:
+                    best_val = val
+                alpha = max(alpha, val)
                 if alpha >= beta:
                     break
-            return value
+            return best_val
 
-        # --- root ---
         moves = generate_moves(board, color)
         if not moves:
-            return None  # truly no legal moves
+            return None
 
-        best_move = moves[0]
         best_score = -INF
-        alpha, beta = -INF, INF
-        next_color = 'b' if color == 'w' else 'w'
-
-        # prioritize captures at root
-        def root_value(move):
-            (fr, fc), (tr, tc) = move
-            t = board[tr][tc]
-            return PieceValues.get(t[1], 0) if t else 0
-        moves.sort(key=root_value, reverse=True)
+        best_move = random.choice(moves)
+        next_col = 'b' if color == 'w' else 'w'
 
         for (fr, fc), (tr, tc) in moves:
             moved_piece = board[fr][fc]
             captured = board[tr][tc]
             make_move(board, fr, fc, tr, tc)
-            score = -negamax(board, next_color, depth - 1, -beta, -alpha)
+            score = -negamax(board, next_col, depth - 1, -INF, INF)
             undo_move(board, fr, fc, tr, tc, captured, moved_piece)
-
-            # mobility bonus: prefer positions with more available moves
-            mobility = len(generate_moves(board, color))
-            score += 0.01 * mobility
-
             if score > best_score:
                 best_score = score
-                best_move = (coords_to_algebraic(fr, fc), coords_to_algebraic(tr, tc))
-            alpha = max(alpha, score)
+                best_move = (fr, fc, tr, tc)
 
-        return best_move
+        fr, fc, tr, tc = best_move
+        return coords_to_algebraic(fr, fc), coords_to_algebraic(tr, tc)
 
 
     def self_play(self, depth: int = 2, max_moves: int = 200) -> Tuple[str, List[Tuple[str, str]]]:
@@ -180,7 +174,22 @@ class Engine:
         if final < 0:
             return 'b', moves
         return 'draw', moves
-
+    def board_to_tensor(self, board: List[List[Optional[str]]]) -> torch.Tensor:
+        mapping = ['wP','wN','wB','wR','wQ','wK','bP','bN','bB','bR','bQ','bK']
+        tensor = torch.zeros(12,8,8, dtype=torch.float32)
+        for r in range(8):
+            for c in range(8):
+                piece = board[r][c]
+                if piece:
+                    idx = mapping.index(piece)
+                    tensor[idx,r,c] = 1.0
+        return tensor.unsqueeze(0).to(self.device)
+    def nn_evaluate(self, board: List[List[Optional[str]]]) -> float:
+        """Neural net evaluation inside the engine."""
+        tensor = self.board_to_tensor(board)
+        with torch.no_grad():
+            return self.nn(tensor).item()
+        
 
 
 
@@ -406,23 +415,37 @@ def undo_move(board: List[List[Optional[str]]], fr: int, fc: int, tr: int, tc: i
     board[tr][tc] = captured
 
 
-def evaluate(board: List[List[Optional[str]]]) -> int:
-    """Simple evaluation: sum of material (white positive).
-    Returns centipawn score from White's perspective.
-    """
-    score = 0
-    for r in range(8):
-        for c in range(8):
-            p = board[r][c]
-            if not p:
-                continue
-            val = PieceValues.get(p[1], 0)
-            if p[0] == 'w':
-                score += val
-            else:
-                score -= val
-    return score
+
+def evaluate(self, board: List[List[Optional[str]]], color: str) -> float:
+    """Combine classic material eval + neural net."""
+    mat_score = sum(
+        self.piece_values.get(p[1], 0) if p[0] == color else -self.piece_values.get(p[1], 0)
+        for row in board for p in row if p
+    )
+    nn_score = self.nn_evaluate(board)
+    return 0.6*mat_score + 0.4*nn_score
 def coords_to_algebraic(r: int, c: int) -> str:
     file = chr(ord('a') + c)
     rank = str(8 - r)
     return file + rank
+def is_king_in_check(board: List[List[Optional[str]]], color: str) -> bool:
+    # find king
+    king_pos = None
+    for r in range(8):
+        for c in range(8):
+            p = board[r][c]
+            if p == f"{color}K":
+                king_pos = (r, c)
+                break
+        if king_pos:
+            break
+    if not king_pos:
+        return False  # no king found, treat as not in check
+
+    kr, kc = king_pos
+    opponent = 'b' if color == 'w' else 'w'
+    moves = generate_moves(board, opponent)
+    for (fr, fc), (tr, tc) in moves:
+        if (tr, tc) == (kr, kc):
+            return True
+    return False
