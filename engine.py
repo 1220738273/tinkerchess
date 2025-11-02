@@ -211,11 +211,8 @@ def is_legal_move(board: List[List[Optional[str]]], fr: int, fc: int, tr: int, t
 
 
 def generate_moves(board: List[List[Optional[str]]], color: str) -> List[Tuple[Tuple[int, int], Tuple[int, int]]]:
-    """Generate all pseudo-legal moves for the given color (no castling/en-passant)."""
-
     moves = []
 
-    # Direction sets for sliding pieces
     directions = {
         'N': [(-2, -1), (-1, -2), (-2, 1), (-1, 2), (1, -2), (2, -1), (1, 2), (2, 1)],
         'B': [(-1, -1), (-1, 1), (1, -1), (1, 1)],
@@ -240,12 +237,12 @@ def generate_moves(board: List[List[Optional[str]]], color: str) -> List[Tuple[T
                     moves.append(((r, c), (tr, c)))
                     # double step
                     tr2 = r + 2 * direction
-                    if r == start_row and 0 <= tr2 < 8 and board[tr2][c] is None and board[tr][c] is None:
+                    if r == start_row and board[tr2][c] is None and board[tr][c] is None:
                         moves.append(((r, c), (tr2, c)))
                 # captures
                 for dc in (-1, 1):
                     tc = c + dc
-                    if 0 <= tr < 8 and 0 <= tc < 8:
+                    if 0 <= tc < 8 and 0 <= tr < 8:
                         target = board[tr][tc]
                         if target and target[0] != color:
                             moves.append(((r, c), (tr, tc)))
@@ -268,11 +265,12 @@ def generate_moves(board: List[List[Optional[str]]], color: str) -> List[Tuple[T
                         else:
                             if target[0] != color:
                                 moves.append(((r, c), (tr, tc)))
-                            break  # blocked
+                            break
                         tr += dr
                         tc += dc
 
     return moves
+
 
 def make_move(board: List[List[Optional[str]]], fr: int, fc: int, tr: int, tc: int) -> Optional[str]:
     """Perform the move and return captured piece (if any). Auto-promotes pawns to queen."""
@@ -316,23 +314,17 @@ def coords_to_algebraic(r: int, c: int) -> str:
 
 
 def choose_move(board: List[List[Optional[str]]], color: str, depth: int = 3) -> Optional[Tuple[str, str]]:
-    """Return best move (from_sq, to_sq) for `color` using negamax alpha-beta with
-    capture quiescence, move ordering, and basic mobility weighting.
-    """
-
     INF = 10**9
 
     def quiescence(board, color, alpha, beta):
-        """Extend search for capture sequences to reduce horizon effect."""
+        """Extend search for captures to avoid horizon effect."""
         stand_pat = evaluate(board)
         if stand_pat >= beta:
             return beta
-        if alpha < stand_pat:
-            alpha = stand_pat
+        alpha = max(alpha, stand_pat)
 
         for (fr, fc), (tr, tc) in generate_moves(board, color):
-            # only explore captures
-            if board[tr][tc] is None:
+            if board[tr][tc] is None:  # only consider captures
                 continue
             moved_piece = board[fr][fc]
             captured = board[tr][tc]
@@ -341,12 +333,10 @@ def choose_move(board: List[List[Optional[str]]], color: str, depth: int = 3) ->
             undo_move(board, fr, fc, tr, tc, captured, moved_piece)
             if score >= beta:
                 return beta
-            if score > alpha:
-                alpha = score
+            alpha = max(alpha, score)
         return alpha
 
     def negamax(board, color, depth, alpha, beta):
-        """Negamax with alpha-beta pruning and simple quiescence search."""
         if depth == 0:
             return quiescence(board, color, alpha, beta)
 
@@ -354,45 +344,41 @@ def choose_move(board: List[List[Optional[str]]], color: str, depth: int = 3) ->
         if not moves:
             return evaluate(board)
 
-        # prioritize captures and checks
+        # Move ordering: captures first
         def move_score(move):
             (fr, fc), (tr, tc) = move
             target = board[tr][tc]
-            base = 0
-            if target:
-                base += PieceValues.get(target[1], 0)  # prefer valuable captures
-            return -base  # sort ascending so high value captures first
+            return PieceValues.get(target[1], 0) if target else 0
 
-        moves.sort(key=move_score)
+        moves.sort(key=move_score, reverse=True)
 
         value = -INF
         next_color = 'b' if color == 'w' else 'w'
+
         for (fr, fc), (tr, tc) in moves:
             moved_piece = board[fr][fc]
             captured = board[tr][tc]
             make_move(board, fr, fc, tr, tc)
             score = -negamax(board, next_color, depth - 1, -beta, -alpha)
             undo_move(board, fr, fc, tr, tc, captured, moved_piece)
-
-            if value > alpha:
-                alpha = value
+            value = max(value, score)
+            alpha = max(alpha, score)
             if alpha >= beta:
                 break
-
         return value
-
-    # sanity check
-    if len(board) != 8 or any(len(row) != 8 or isinstance(row, str) for row in board):
-        raise ValueError("Invalid board format: expected 8x8 list of lists, not strings.")
 
     moves = generate_moves(board, color)
     if not moves:
         return None
 
-    best_move = None
     best_score = -INF
+    best_move = None
     alpha, beta = -INF, INF
     next_color = 'b' if color == 'w' else 'w'
+
+    # prioritize captures in top-level move selection
+    moves.sort(key=lambda m: PieceValues.get(board[m[1][0]][m[1][1]][1], 0)
+               if board[m[1][0]][m[1][1]] else 0, reverse=True)
 
     for (fr, fc), (tr, tc) in moves:
         moved_piece = board[fr][fc]
@@ -400,16 +386,11 @@ def choose_move(board: List[List[Optional[str]]], color: str, depth: int = 3) ->
         make_move(board, fr, fc, tr, tc)
         score = -negamax(board, next_color, depth - 1, -beta, -alpha)
         undo_move(board, fr, fc, tr, tc, captured, moved_piece)
-
-        # slight mobility bias (favor positions with more available moves)
-        if score == best_score:
-            score += 0.01 * len(generate_moves(board, color))
-
         if score > best_score:
             best_score = score
             best_move = (coords_to_algebraic(fr, fc), coords_to_algebraic(tr, tc))
-        if score > alpha:
-            alpha = score
+        alpha = max(alpha, score)
 
     return best_move
+
 
