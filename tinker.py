@@ -498,7 +498,7 @@ def mov_king(color: str) :
                     move_bot_piece(coords_to_algebraic(x, y), coords_to_algebraic(new_x, new_y))
                     return
 
-def engine_move_once(depth: int = 5):
+def engine_move_once(depth: int = 3):
     """Ask the engine for a move at given depth and apply it once.
 
     Returns the move tuple (from_sq, to_sq) or None.
@@ -510,9 +510,7 @@ def engine_move_once(depth: int = 5):
         return None
     # copy board for engine search
     search_board = [row.copy() for row in board]
-
-    mv = Engine.choose_move(engine_color, search_board, depth)
-    print(mv)
+    mv = Engine.choose_move(search_board, engine_color, depth)
     if not mv:
         return None
     from_sq, to_sq = mv

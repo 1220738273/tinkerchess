@@ -57,24 +57,53 @@ class Engine:
                 else:
                     score -= val
         return score
+    def choose_move(board: List[List[Optional[str]]], color: str, depth: int = 3) -> Optional[Tuple[str, str]]:
 
-    def choose_move(self, board: List[List[Optional[str]]], color: str, depth: int = 3) -> Optional[Tuple[str, str]]:
-        # simple wrapper around module functions but using self.evaluate via closure
-        # We'll implement a negamax that calls back to self.evaluate
-        best_move = None
 
-        def negamax(board, color, ply, alpha, beta):
-            if ply == 0:
-                return self.evaluate(board)
+        INF = 10**9
+
+        def quiescence(board, color, alpha, beta):
+            stand_pat = evaluate(board)
+            if stand_pat >= beta:
+                return beta
+            alpha = max(alpha, stand_pat)
+
+            for (fr, fc), (tr, tc) in generate_moves(board, color):
+                if board[tr][tc] is None:  # only captures
+                    continue
+                moved_piece = board[fr][fc]
+                captured = board[tr][tc]
+                make_move(board, fr, fc, tr, tc)
+                score = -quiescence(board, 'b' if color == 'w' else 'w', -beta, -alpha)
+                undo_move(board, fr, fc, tr, tc, captured, moved_piece)
+                if score >= beta:
+                    return beta
+                alpha = max(alpha, score)
+            return alpha
+
+        def negamax(board, color, depth, alpha, beta):
+            if depth == 0:
+                return quiescence(board, color, alpha, beta)
+
             moves = generate_moves(board, color)
             if not moves:
-                return self.evaluate(board)
-            value = -9999999
+                return evaluate(board)
+
+            # capture-first ordering
+            def move_value(move):
+                (fr, fc), (tr, tc) = move
+                t = board[tr][tc]
+                return PieceValues.get(t[1], 0) if t else 0
+            moves.sort(key=move_value, reverse=True)
+
+            value = -INF
+            next_color = 'b' if color == 'w' else 'w'
+
             for (fr, fc), (tr, tc) in moves:
                 moved_piece = board[fr][fc]
                 captured = board[tr][tc]
                 make_move(board, fr, fc, tr, tc)
-                score = -negamax(board, 'b' if color == 'w' else 'w', ply - 1, -beta, -alpha)
+                score = -negamax(board, next_color, depth - 1, -beta, -alpha)
                 undo_move(board, fr, fc, tr, tc, captured, moved_piece)
                 if score > value:
                     value = score
@@ -83,23 +112,41 @@ class Engine:
                     break
             return value
 
+        # --- root ---
         moves = generate_moves(board, color)
         if not moves:
-            return None
-        best_score = -9999999
-        alpha = -9999999
-        beta = 9999999
+            return None  # truly no legal moves
+
+        best_move = moves[0]
+        best_score = -INF
+        alpha, beta = -INF, INF
+        next_color = 'b' if color == 'w' else 'w'
+
+        # prioritize captures at root
+        def root_value(move):
+            (fr, fc), (tr, tc) = move
+            t = board[tr][tc]
+            return PieceValues.get(t[1], 0) if t else 0
+        moves.sort(key=root_value, reverse=True)
+
         for (fr, fc), (tr, tc) in moves:
             moved_piece = board[fr][fc]
             captured = board[tr][tc]
             make_move(board, fr, fc, tr, tc)
-            score = -negamax(board, 'b' if color == 'w' else 'w', depth - 1, -beta, -alpha)
+            score = -negamax(board, next_color, depth - 1, -beta, -alpha)
             undo_move(board, fr, fc, tr, tc, captured, moved_piece)
+
+            # mobility bonus: prefer positions with more available moves
+            mobility = len(generate_moves(board, color))
+            score += 0.01 * mobility
+
             if score > best_score:
                 best_score = score
                 best_move = (coords_to_algebraic(fr, fc), coords_to_algebraic(tr, tc))
             alpha = max(alpha, score)
+
         return best_move
+
 
     def self_play(self, depth: int = 2, max_moves: int = 200) -> Tuple[str, List[Tuple[str, str]]]:
         """Play a game between two copies of this engine and return winner ('w','b','draw') and move list."""
@@ -211,7 +258,30 @@ def is_legal_move(board: List[List[Optional[str]]], fr: int, fc: int, tr: int, t
 
 
 def generate_moves(board: List[List[Optional[str]]], color: str) -> List[Tuple[Tuple[int, int], Tuple[int, int]]]:
-    moves = []
+    """
+    Generate all pseudo-legal moves for color.
+    - Accepts color as 'w'|'b' or 'white'|'black' (case-insensitive).
+    - Validates board shape and piece formats and raises helpful errors if something is wrong.
+    """
+    # --- normalize color ---
+    if not isinstance(color, str):
+        raise ValueError(f"color must be a string 'w' or 'b', got: {color!r} (type {type(color)})")
+    lc = color.lower()
+    if lc in ('w', 'white'):
+        color = 'w'
+    elif lc in ('b', 'black'):
+        color = 'b'
+    else:
+        raise ValueError(f"color must be 'w'/'white' or 'b'/'black', got: {color!r}")
+
+    # --- validate board shape ---
+    if not (isinstance(board, list) and len(board) == 8):
+        raise ValueError(f"board must be a list of 8 rows, got type {type(board)} with length {len(board) if hasattr(board,'__len__') else 'n/a'}")
+    for i, row in enumerate(board):
+        if not (isinstance(row, list) and len(row) == 8):
+            raise ValueError(f"board row {i} must be a list of length 8, got {type(row)} length {len(row) if hasattr(row,'__len__') else 'n/a'} -> {row!r}")
+
+    moves: List[Tuple[Tuple[int, int], Tuple[int, int]]] = []
 
     directions = {
         'N': [(-2, -1), (-1, -2), (-2, 1), (-1, 2), (1, -2), (2, -1), (1, 2), (2, 1)],
@@ -221,40 +291,78 @@ def generate_moves(board: List[List[Optional[str]]], color: str) -> List[Tuple[T
         'K': [(-1, -1), (-1, 1), (1, -1), (1, 1), (-1, 0), (1, 0), (0, -1), (0, 1)],
     }
 
+    VALID_PIECE_CHARS = set(('P', 'N', 'B', 'R', 'Q', 'K'))
+
     for r in range(8):
         for c in range(8):
             piece = board[r][c]
-            if not piece or piece[0] != color:
-                continue
-            pt = piece[1]
 
+            # skip empty squares quickly
+            if piece is None:
+                continue
+
+            # piece must be a 2-char string like 'wP' or 'bK'
+            if not isinstance(piece, str):
+                raise ValueError(f"board[{r}][{c}] is not None or str: {piece!r} (type {type(piece)})")
+            s = piece.strip()
+            if len(s) < 2:
+                raise ValueError(f"board[{r}][{c}] has invalid piece string: {piece!r}")
+            # allow forms like 'wP' or 'Wp' or ' wP '
+            p_color = s[0].lower()
+            p_type = s[1].upper()
+
+            if p_color not in ('w', 'b'):
+                raise ValueError(f"board[{r}][{c}] has invalid color char: {s!r}")
+            if p_type not in VALID_PIECE_CHARS:
+                raise ValueError(f"board[{r}][{c}] has invalid piece type: {s!r}")
+
+            # only process pieces of requested color
+            if p_color != color:
+                continue
+
+            pt = p_type  # now guaranteed to be 'P','N','B','R','Q','K'
+
+            # Pawn logic
             if pt == 'P':
                 direction = -1 if color == 'w' else 1
                 start_row = 6 if color == 'w' else 1
-                # single step
+
                 tr = r + direction
+                # single step
                 if 0 <= tr < 8 and board[tr][c] is None:
                     moves.append(((r, c), (tr, c)))
-                    # double step
+                    # double step: ensure both squares empty and within bounds
                     tr2 = r + 2 * direction
-                    if r == start_row and board[tr2][c] is None and board[tr][c] is None:
+                    if r == start_row and 0 <= tr2 < 8 and board[tr2][c] is None and board[tr][c] is None:
                         moves.append(((r, c), (tr2, c)))
+
                 # captures
                 for dc in (-1, 1):
                     tc = c + dc
                     if 0 <= tc < 8 and 0 <= tr < 8:
                         target = board[tr][tc]
-                        if target and target[0] != color:
-                            moves.append(((r, c), (tr, tc)))
+                        if target is not None:
+                            if not isinstance(target, str):
+                                raise ValueError(f"board[{tr}][{tc}] unexpected type: {target!r}")
+                            targ_color = target.strip()[0].lower()
+                            if targ_color != color:
+                                moves.append(((r, c), (tr, tc)))
 
+            # Knight or King (fixed offsets)
             elif pt in ('N', 'K'):
                 for dr, dc in directions[pt]:
                     tr, tc = r + dr, c + dc
                     if 0 <= tr < 8 and 0 <= tc < 8:
                         target = board[tr][tc]
-                        if target is None or target[0] != color:
+                        if target is None:
                             moves.append(((r, c), (tr, tc)))
+                        else:
+                            if not isinstance(target, str):
+                                raise ValueError(f"board[{tr}][{tc}] unexpected type: {target!r}")
+                            if target.strip()[0].lower() != color:
+                                moves.append(((r, c), (tr, tc)))
 
+            # Sliding pieces: Bishop, Rook, Queen
             elif pt in ('B', 'R', 'Q'):
                 for dr, dc in directions[pt]:
                     tr, tc = r + dr, c + dc
@@ -263,13 +371,20 @@ def generate_moves(board: List[List[Optional[str]]], color: str) -> List[Tuple[T
                         if target is None:
                             moves.append(((r, c), (tr, tc)))
                         else:
-                            if target[0] != color:
+                            if not isinstance(target, str):
+                                raise ValueError(f"board[{tr}][{tc}] unexpected type: {target!r}")
+                            if target.strip()[0].lower() != color:
                                 moves.append(((r, c), (tr, tc)))
-                            break
+                            break  # blocked
                         tr += dr
                         tc += dc
 
+            else:
+                # should not happen due to earlier validation, but keep safe
+                raise ValueError(f"Unhandled piece type at board[{r}][{c}]: {piece!r}")
+
     return moves
+
 
 
 def make_move(board: List[List[Optional[str]]], fr: int, fc: int, tr: int, tc: int) -> Optional[str]:
@@ -307,90 +422,7 @@ def evaluate(board: List[List[Optional[str]]]) -> int:
             else:
                 score -= val
     return score
-
-
 def coords_to_algebraic(r: int, c: int) -> str:
-    return f"{chr(ord('a') + c)}{8 - r}"
-
-
-def choose_move(board: List[List[Optional[str]]], color: str, depth: int = 3) -> Optional[Tuple[str, str]]:
-    INF = 10**9
-
-    def quiescence(board, color, alpha, beta):
-        """Extend search for captures to avoid horizon effect."""
-        stand_pat = evaluate(board)
-        if stand_pat >= beta:
-            return beta
-        alpha = max(alpha, stand_pat)
-
-        for (fr, fc), (tr, tc) in generate_moves(board, color):
-            if board[tr][tc] is None:  # only consider captures
-                continue
-            moved_piece = board[fr][fc]
-            captured = board[tr][tc]
-            make_move(board, fr, fc, tr, tc)
-            score = -quiescence(board, 'b' if color == 'w' else 'w', -beta, -alpha)
-            undo_move(board, fr, fc, tr, tc, captured, moved_piece)
-            if score >= beta:
-                return beta
-            alpha = max(alpha, score)
-        return alpha
-
-    def negamax(board, color, depth, alpha, beta):
-        if depth == 0:
-            return quiescence(board, color, alpha, beta)
-
-        moves = generate_moves(board, color)
-        if not moves:
-            return evaluate(board)
-
-        # Move ordering: captures first
-        def move_score(move):
-            (fr, fc), (tr, tc) = move
-            target = board[tr][tc]
-            return PieceValues.get(target[1], 0) if target else 0
-
-        moves.sort(key=move_score, reverse=True)
-
-        value = -INF
-        next_color = 'b' if color == 'w' else 'w'
-
-        for (fr, fc), (tr, tc) in moves:
-            moved_piece = board[fr][fc]
-            captured = board[tr][tc]
-            make_move(board, fr, fc, tr, tc)
-            score = -negamax(board, next_color, depth - 1, -beta, -alpha)
-            undo_move(board, fr, fc, tr, tc, captured, moved_piece)
-            value = max(value, score)
-            alpha = max(alpha, score)
-            if alpha >= beta:
-                break
-        return value
-
-    moves = generate_moves(board, color)
-    if not moves:
-        return None
-
-    best_score = -INF
-    best_move = None
-    alpha, beta = -INF, INF
-    next_color = 'b' if color == 'w' else 'w'
-
-    # prioritize captures in top-level move selection
-    moves.sort(key=lambda m: PieceValues.get(board[m[1][0]][m[1][1]][1], 0)
-               if board[m[1][0]][m[1][1]] else 0, reverse=True)
-
-    for (fr, fc), (tr, tc) in moves:
-        moved_piece = board[fr][fc]
-        captured = board[tr][tc]
-        make_move(board, fr, fc, tr, tc)
-        score = -negamax(board, next_color, depth - 1, -beta, -alpha)
-        undo_move(board, fr, fc, tr, tc, captured, moved_piece)
-        if score > best_score:
-            best_score = score
-            best_move = (coords_to_algebraic(fr, fc), coords_to_algebraic(tr, tc))
-        alpha = max(alpha, score)
-
-    return best_move
-
-
+    file = chr(ord('a') + c)
+    rank = str(8 - r)
+    return file + rank
